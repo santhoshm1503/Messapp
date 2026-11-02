@@ -4,80 +4,138 @@ name: Build VIT MessMate Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      # 1. Download repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      # 2. Setup Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
-      - name: Setup Java
+      # 3. Setup Java
+      - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Extract project ZIP
+      # 4. Extract uploaded project ZIP
+      - name: Extract Project ZIP
+        shell: bash
         run: |
-          ZIP=$(find . -maxdepth 1 -iname '*.zip' | head -n 1)
-          test -n "$ZIP"
-          mkdir extracted
-          unzip "$ZIP" -d extracted
-          PROJECT=$(find extracted -name package.json | head -n 1 | xargs dirname)
-          echo "PROJECT=$PROJECT" >> $GITHUB_ENV
+          set -e
 
-      - name: Install dependencies
+          ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: Project ZIP not found"
+            exit 1
+          fi
+
+          mkdir -p extracted
+          unzip -q "$ZIP" -d extracted
+
+          PROJECT=$(find extracted -name package.json -not -path '*/node_modules/*' | head -n 1 | xargs dirname)
+
+          if [ -z "$PROJECT" ]; then
+            echo "ERROR: package.json not found"
+            exit 1
+          fi
+
+          echo "PROJECT=$PROJECT" >> "$GITHUB_ENV"
+
+          echo "Project located at: $PROJECT"
+
+      # 5. Install dependencies
+      - name: Install Dependencies
         run: |
           cd "$PROJECT"
+
           npm install --legacy-peer-deps
-          npm install --legacy-peer-deps @capacitor/core@7 @capacitor/cli@7 @capacitor/android@7
 
-      - name: Build web application
+          npm install --legacy-peer-deps \
+            @capacitor/core@7 \
+            @capacitor/cli@7 \
+            @capacitor/android@7
+
+      # 6. Build React application
+      - name: Build Web Application
         run: |
           cd "$PROJECT"
+
           npm run build
 
+          if [ ! -d dist ]; then
+            echo "ERROR: Web build directory missing"
+            exit 1
+          fi
+
+      # 7. Configure Capacitor
       - name: Configure Android
         run: |
           cd "$PROJECT"
-          cat > capacitor.config.ts <<'EOF'
-          import type { CapacitorConfig } from '@capacitor/cli';
 
-          const config: CapacitorConfig = {
-            appId: 'com.santhoshm1503.vitmessmate',
-            appName: 'VIT MessMate',
-            webDir: 'dist',
-            server: {
-              androidScheme: 'https'
+          rm -f capacitor.config.ts
+          rm -f capacitor.config.js
+          rm -f capacitor.config.mjs
+
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.santhoshm1503.vitmessmate",
+            "appName": "VIT MessMate",
+            "webDir": "dist",
+            "server": {
+              "androidScheme": "https"
             }
-          };
-
-          export default config;
+          }
           EOF
 
           npx cap add android
           npx cap sync android
 
-      - name: Build APK
+      # 8. Compile Android APK
+      - name: Build Android APK
         run: |
           cd "$PROJECT/android"
+
           chmod +x gradlew
+
           ./gradlew assembleDebug
 
-      - name: Upload APK
+          echo "APK BUILD SUCCESSFUL"
+
+      # 9. Verify APK
+      - name: Verify APK
+        run: |
+          APK="$PROJECT/android/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "ERROR: APK file not generated"
+            exit 1
+          fi
+
+          ls -lh "$APK"
+
+      # 10. Upload APK for download
+      - name: Upload VIT MessMate APK
         uses: actions/upload-artifact@v4
         with:
-          name: VIT-MessMate-APK
+          name: VIT-MessMate-Android-APK
           path: ${{ env.PROJECT }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
           
